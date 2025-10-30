@@ -5,7 +5,8 @@ from database import save_to_db
 from analyze import summarize_sites
 
 # 1️⃣ Extract
-df = fetch_trials(condition="lung cancer", phase="Phase 3", max_results=200)
+df = fetch_trials(condition="lung cancer", phase="3", max_results=100)
+print(df.head())
 
 # 2️⃣ Transform
 df = clean_sites(df)
@@ -19,3 +20,4 @@ sites["data_quality"] = sites.apply(compute_data_quality, axis=1)
 save_to_db(sites)
 summary = summarize_sites(sites)
 print(summary.head())
+summary.to_csv("clinical_summary.csv", index=False)
