@@ -1,0 +1,17 @@
+# Core Data Processing
+pandas==2.2.2
+numpy==1.26.4
+
+# API Requests
+requests==2.32.3
+
+# Database (SQLite)
+SQLAlchemy==2.0.29
+
+# Web App Dashboard
+streamlit==1.39.0
+matplotlib==3.9.2
+altair==5.4.1
+
+# Optional Utilities
+python-dateutil==2.9.0.post0
