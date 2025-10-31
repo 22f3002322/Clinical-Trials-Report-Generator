@@ -33,7 +33,7 @@ def aggregate_site_data(df):
     grouped = (
         df.groupby(["facility_clean", "country"])
         .agg({
-            "nct_id": lambda x: len(set(x)),
+            "nct_id": lambda x: list(set(x)),  # keep full list
             "phase": flatten_unique,
             "status": flatten_unique,
             "condition": flatten_unique,
@@ -42,9 +42,10 @@ def aggregate_site_data(df):
         .reset_index()
     )
 
-    grouped.rename(columns={"nct_id": "trial_count"}, inplace=True)
+    # Add separate trial count column
+    grouped["trial_count"] = grouped["nct_id"].apply(len)
 
-    # Sort by highest number of trials
+    # Sort by trial count
     grouped = grouped.sort_values("trial_count", ascending=False).reset_index(drop=True)
 
     return grouped

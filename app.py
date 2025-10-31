@@ -1,122 +1,145 @@
 import streamlit as st
 import pandas as pd
 import subprocess
-from analyze import summarize_sites
-from database import load_from_db, load_latest_metadata
+import sqlite3
 import plotly.express as px
+import os
+from datetime import datetime
 
-st.set_page_config(page_title="Clinical Trial Site Intelligence", layout="wide")
+DB_PATH = "clinical_trials.db"
 
-st.title("🏥 Clinical Trial Site Intelligence Dashboard")
-
-# ======================================================
-# 🔄 Sidebar — fetch new data
-# ======================================================
-st.sidebar.header("🔄 Update / Fetch New Data")
-
-cond_input = st.sidebar.text_input("Enter condition (e.g., lung cancer)", "cancer")
-phase_input = st.sidebar.selectbox("Select Phase", ["1", "2", "3"])
-max_results = st.sidebar.slider("Max Trials to Fetch", 100, 2000, 1000, step=100)
-
-if st.sidebar.button("Fetch New Data"):
-    with st.spinner(f"Fetching new {cond_input} (Phase {phase_input}) data..."):
-        try:
-            subprocess.run(
-                [
-                    "python",
-                    "main.py",
-                    "--condition", cond_input,
-                    "--phase", phase_input,
-                ],
-                check=True,
-            )
-            st.success(f"✅ Database updated for {cond_input} (Phase {phase_input})!")
-            st.cache_data.clear()
-        except Exception as e:
-            st.error(f"❌ Error while fetching data: {e}")
-
-st.sidebar.markdown("---")
-st.sidebar.caption("💡 Tip: Try 'breast cancer', 'lung cancer', 'diabetes', etc.")
-
-# ======================================================
-# 🧠 Show Last Fetched Info
-# ======================================================
-meta = load_latest_metadata()
-if meta:
-    st.markdown(f"""
-    **🧠 Last Fetched Data**
-    - Condition: `{meta['condition']}`
-    - Phase: `{meta['phase']}`
-    - Updated: `{meta['updated_at']}`
-    """)
-else:
-    st.info("No previous fetch found. Use sidebar to fetch first dataset.")
-
-# ======================================================
-# 📊 Load and display current summary
-# ======================================================
-st.subheader("📋 Current Summary")
-
-@st.cache_data
+# -------------------------
+# Database utilities
+# -------------------------
 def load_summary():
+    if not os.path.exists(DB_PATH):
+        st.warning("No database found. Please run the pipeline first.")
+        return None
+
+    conn = sqlite3.connect(DB_PATH)
     try:
-        df = load_from_db()
-        return summarize_sites(df)
+        df = pd.read_sql("SELECT * FROM site_analysis", conn)
     except Exception as e:
         st.error(f"Error loading data: {e}")
-        return pd.DataFrame()
+        conn.close()
+        return None
+    conn.close()
+    return df
+
+
+def load_metadata():
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        meta = pd.read_sql("SELECT * FROM metadata ORDER BY timestamp DESC LIMIT 1", conn)
+    except Exception:
+        meta = pd.DataFrame()
+    conn.close()
+    return meta
+
+
+# -------------------------
+# Sidebar Controls
+# -------------------------
+st.sidebar.title("⚙️ Pipeline Controls")
+
+condition = st.sidebar.text_input("Condition", "cancer")
+phase = st.sidebar.selectbox("Trial Phase", ["1", "2", "3"], index=2)
+max_results = st.sidebar.slider("Max Results", 100, 2000, 1000, step=100)
+
+if st.sidebar.button("🚀 Fetch & Process Data"):
+    with st.spinner(f"Running pipeline for {condition} (Phase {phase})..."):
+        try:
+            subprocess.run(
+                ["python", "main.py", "--condition", condition, "--phase", phase, "--max_results", str(max_results)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            st.success("✅ Pipeline completed successfully!")
+        except subprocess.CalledProcessError as e:
+            st.error(f"❌ Error while fetching data: {e}")
+            st.text(e.output)
+
+# -------------------------
+# Main Dashboard
+# -------------------------
+st.title("🏥 Clinical Trial Site Analysis Dashboard")
+
+metadata = load_metadata()
+if not metadata.empty:
+    m = metadata.iloc[0]
+    st.info(f"""
+    **🧠 Last Fetched Data**  
+    **Condition:** {m['condition']}  
+    **Phase:** {m['phase']}  
+    **Updated:** {m['timestamp']}
+    """)
 
 summary = load_summary()
-
-if summary.empty:
+if summary is None or summary.empty:
     st.warning("No data available. Try fetching new data from the sidebar.")
-else:
-    # ======================================================
-    # 🔢 Top Facilities by Match Score
-    # ======================================================
-    st.subheader("🏆 Top Facilities by Match Score")
-    top_sites = summary.sort_values(by="match_score", ascending=False).head(20)
+    st.stop()
 
-    fig_rank = px.bar(
-        top_sites,
-        x="facility_clean",
-        y="match_score",
-        color="country",
-        title="Match Score Ranking",
-        labels={"facility_clean": "Facility", "match_score": "Match Score"},
+# -------------------------
+# Data Cleanup
+# -------------------------
+if "trial_count" not in summary.columns and "nct_id" in summary.columns:
+    summary["trial_count"] = summary["nct_id"].apply(
+        lambda x: len(x.split(",")) if isinstance(x, str) else 0
     )
-    st.plotly_chart(fig_rank, use_container_width=True)
 
-    # ======================================================
-    # 🌍 Trials per Country
-    # ======================================================
-    st.subheader("🌍 Trials per Country")
-    fig_country = px.bar(
-        summary.groupby("country")["nct_id"].count().reset_index().rename(columns={"nct_id": "trial_count"}),
-        x="country",
-        y="trial_count",
-        title="Number of Trials by Country",
+# Handle missing match_score gracefully
+if "match_score" not in summary.columns:
+    summary["match_score"] = 0
+
+# -------------------------
+# Charts Section
+# -------------------------
+st.subheader("🏆 Top Sites by Match Score")
+
+top_sites = summary.sort_values(by="match_score", ascending=False).head(20)
+fig1 = px.bar(
+    top_sites,
+    x="facility_clean",
+    y="match_score",
+    color="country",
+    text="trial_count",
+    title="Top 20 Facilities by Match Score",
+)
+fig1.update_layout(xaxis_title="Facility", yaxis_title="Match Score", xaxis_tickangle=-45)
+st.plotly_chart(fig1, use_container_width=True)
+
+# -------------------------
+# Trials by Country
+# -------------------------
+st.subheader("🌍 Trials by Country")
+
+country_summary = (
+    summary.groupby("country")["trial_count"].sum().reset_index().sort_values("trial_count", ascending=False)
+)
+fig2 = px.bar(country_summary, x="country", y="trial_count", title="Total Trials by Country")
+st.plotly_chart(fig2, use_container_width=True)
+
+# Optional: Map visualization (if city data available)
+if "country" in summary.columns:
+    st.subheader("🗺️ Geographic Distribution")
+    country_counts = (
+        summary.groupby("country")["trial_count"].sum().reset_index()
     )
-    st.plotly_chart(fig_country, use_container_width=True)
-
-    # ======================================================
-    # 📈 Match Score vs Data Quality
-    # ======================================================
-    st.subheader("📈 Match Score vs Data Quality")
-    fig_scatter = px.scatter(
-        summary,
-        x="match_score",
-        y="data_quality",
-        color="country",
-        hover_data=["facility_clean", "trial_count"],
-        title="Match Score vs Data Quality",
+    fig_map = px.choropleth(
+        country_counts,
+        locations="country",
+        locationmode="country names",
+        color="trial_count",
+        color_continuous_scale="Blues",
+        title="Clinical Trials by Country",
     )
-    st.plotly_chart(fig_scatter, use_container_width=True)
+    st.plotly_chart(fig_map, use_container_width=True)
 
-    # ======================================================
-    # 📑 Data Table
-    # ======================================================
-    st.subheader("📑 Data Table")
-    st.dataframe(summary.head(50))
+# -------------------------
+# Raw Data
+# -------------------------
+st.subheader("📋 Full Data")
+st.dataframe(summary)
 
-    st.success("✅ Dashboard loaded successfully!")
+st.success("✅ Dashboard loaded successfully!")

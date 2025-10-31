@@ -53,6 +53,16 @@ def load_latest_metadata(db_path=DB_PATH):
     conn = sqlite3.connect(db_path)
     cur = conn.cursor()
 
+    # ✅ Ensure the metadata table exists
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS metadata (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            condition TEXT,
+            phase TEXT,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     cur.execute("""
         SELECT condition, phase, updated_at 
         FROM metadata 
@@ -64,14 +74,8 @@ def load_latest_metadata(db_path=DB_PATH):
     conn.close()
 
     if row:
-        return {
-            "condition": row[0],
-            "phase": row[1],
-            "updated_at": row[2]
-        }
-
+        return {"condition": row[0], "phase": row[1], "updated_at": row[2]}
     return None
-
 
 # =========================================
 # 🔹 (Optional) Load data from DB
